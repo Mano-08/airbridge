@@ -1,0 +1,19 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+name = "engine"
+
+[dependencies]
+uniffi = { version = "0.25.3", features = [ "cli" ] }
+reqwest = { version = "0.13", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+rtc-stun = "0.9.0"
+quinn = "0.11.11"
+rustls = "0.23.42"
+rcgen = "0.14.8"
+stun = "0.17.1"
+anyhow = "1.0.103"
