@@ -21,7 +21,7 @@ fn create_room(passcode: String) -> Result<String, EngineError> {
 
 #[uniffi::export]
 fn join_room(room_id: String, passcode: String) -> Result<bool, EngineError> {
-    let peer_info = stun::get_public_address(LOCAL_PORT)?;
+    let _peer_info = stun::get_public_address(LOCAL_PORT)?;
     let rt = Runtime::new()?;
     rt.block_on(handle_join_room(room_id, passcode))
 }

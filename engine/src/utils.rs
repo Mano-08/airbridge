@@ -9,7 +9,7 @@ pub async fn handle_join_room(
     _passcode: String
 ) -> Result<bool, EngineError> {
     let endpoint = format!("{BACKEND_URL}/api/v1/room/join/{_room_id}");
-    let identity = generate_self_signed_identity(vec!["localhost".to_string()])?;
+    let _identity = generate_self_signed_identity(vec!["localhost".to_string()])?;
     let client = Client::new();
     let body = JoinRoomRequestBody {
         passcode: _passcode
@@ -20,7 +20,7 @@ pub async fn handle_join_room(
                                 .send()
                                 .await?;
                             
-    let response_data: JoinRoomResponseBody = response.json().await?;
+    let _response_data: JoinRoomResponseBody = response.json().await?;
     Ok(true)
 }
 
