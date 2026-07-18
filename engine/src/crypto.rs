@@ -1,143 +1,53 @@
-use rcgen::{CertificateParams, KeyPair, DistinguishedName};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use std::sync::Arc;
+use rcgen::{generate_simple_self_signed, CertifiedKey};
+use sha2::{Digest, Sha256};
+use x509_parser::prelude::*;
 
-pub struct QuicCreds {
-    pub certs: Vec<CertificateDer<'static>>,
-    pub key: PrivateKeyDer<'static>,
+/// Holds everything you need: the PEM cert/key to use locally,
+/// and the fingerprint to hand to the peer for verification.
+pub struct SelfSignedIdentity {
+    cert_pem: String,
+    key_pem: String,
+    cert_der: Vec<u8>,
+    /// SHA-256 fingerprint of the DER-encoded certificate (hex string)
+    cert_fingerprint_sha256: String,
+    /// SHA-256 fingerprint of just the public key (SPKI DER), hex string
+    pub pubkey_fingerprint_sha256: String,
 }
 
-/// Generates an on-the-fly self-signed certificate for mTLS
-pub fn generate_self_signed() -> Result<QuicCreds, anyhow::Error> {
-    let mut params = CertificateParams::default();
-    let mut dn = DistinguishedName::new();
-    dn.push(rcgen::DnType::CommonName, "p2p-quic-node");
-    params.distinguished_name = dn;
-    
-    // Support TLS 1.3 compatible algos
-    let key_pair = KeyPair::generate()?;
-    let cert = params.self_signed(&key_pair)?;
-    
-    Ok(QuicCreds {
-        certs: vec![cert.der().to_vec().into()],
-        key: PrivateKeyDer::Pkcs8(key_pair.serialize_der().into()),
+pub fn generate_self_signed_identity(subject_alt_names: Vec<String>) -> Result<SelfSignedIdentity, anyhow::Error> {
+    // Generates a self-signed cert + keypair for the given SANs (e.g. "localhost", "peerA.local")
+    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(subject_alt_names)?;
+
+    let cert_pem = cert.pem();
+    let key_pem = signing_key.serialize_pem();
+    let cert_der = cert.der().to_vec();
+
+    // Fingerprint of the whole certificate (common for TLS cert pinning)
+    let cert_fingerprint_sha256 = sha256_hex(&cert_der);
+
+    // Fingerprint of just the SubjectPublicKeyInfo (public key only, no cert wrapper)
+    // Useful when you want to pin the key even if the cert is regenerated/reissued.
+    let spki_der = extract_spki_der(&cert_der)?;
+    let pubkey_fingerprint_sha256 = sha256_hex(&spki_der);
+
+    Ok(SelfSignedIdentity {
+        cert_pem,
+        key_pem,
+        cert_der,
+        cert_fingerprint_sha256,
+        pubkey_fingerprint_sha256,
     })
 }
 
-/// A simple Rustls verifier that skips standard CA verification 
-/// and blindly accepts the peer's certificate for demo purposes.
-/// In production, you would match the peer's certificate hash against a known value.
-#[derive(Debug)]
-struct SkipVerification;
-
-impl rustls::client::danger::ServerCertVerifier for SkipVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::digitally_signed::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::digitally_signed::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-        ]
-    }
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
 }
 
-// Mirror verifier for the server side checking the client
-#[derive(Debug)]
-struct SkipClientVerification;
-
-impl rustls::server::danger::ClientCertVerifier for SkipClientVerification {
-    fn verify_client_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::server::danger::ClientCertVerified, rustls::Error> {
-        Ok(rustls::server::danger::ClientCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::digitally_signed::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::digitally_signed::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-        ]
-    }
-
-    fn root_hint_subjects(&self) -> &[rustls::pki_types::DistinguishedName] {
-        &[]
-    }
-}
-
-pub fn configure_quic_client(creds: QuicCreds) -> Result<quinn::ClientConfig, anyhow::Error> {
-    let mut crypto = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SkipVerification))
-        .with_client_auth_cert(creds.certs, creds.key)?;
-    
-    crypto.alpn_protocols = vec![b"p2p-file-transfer".to_vec()];
-    let mut client_config = quinn::ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto)?));
-    
-    // Optimize transport parameters for fast P2P hole punching if needed
-    let mut transport = quinn::TransportConfig::default();
-    transport.max_idle_timeout(Some(std::time::Duration::from_secs(10)).try_into().unwrap());
-    client_config.transport_config(Arc::new(transport));
-    
-    Ok(client_config)
-}
-
-pub fn configure_quic_server(creds: QuicCreds) -> Result<quinn::ServerConfig, anyhow::Error> {
-    let mut crypto = rustls::ServerConfig::builder()
-        .with_client_cert_verifier(Arc::new(SkipClientVerification))
-        .with_single_cert(creds.certs, creds.key)?;
-        
-    crypto.alpn_protocols = vec![b"p2p-file-transfer".to_vec()];
-    let server_config = quinn::ServerConfig::with_crypto(Arc::new(quinn::crypto::rustls::QuicServerConfig::try_from(crypto)?));
-    
-    Ok(server_config)
+/// Parses the DER certificate to pull out the SubjectPublicKeyInfo bytes.
+/// Uses `x509-parser` under the hood for correctness instead of hand-rolling ASN.1 parsing.
+fn extract_spki_der(cert_der: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+    let (_, cert) = X509Certificate::from_der(cert_der)?;
+    Ok(cert.public_key().raw.to_vec())
 }

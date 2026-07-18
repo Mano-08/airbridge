@@ -1,67 +1,63 @@
-from fastapi import FastAPI
-from fastapi import APIRouter
-
-app = FastAPI()
-api_router = APIRouter(prefix="/api/v1")
-
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
-
-
-from fastapi import Request, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 import uuid
 import os
-import httpx
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_API_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-SUPABASE_TABLE = "rooms"
+app = FastAPI()
 
-@api_router.get("/create_room")
-async def create_room(
-    request: Request,
-    formerPort: int = Query(..., ge=0, le=65535),
-    formerID: str = Query(None)
-):
-    # Generate new roomId and formerID if not provided
-    room_id = str(uuid.uuid4())
-    if formerID is None:
-        formerID = str(uuid.uuid4())
-    # Get IP address of requester
-    client_host = request.client.host
+# in-memory "database": room_id -> room data
+rooms: dict[str, dict] = {}
 
-    # Build row for insert
-    row = {
-        "active": True,
-        "roomId": room_id,
-        "formerID": formerID,
-        "formerIP": client_host,
-        "formerPort": formerPort,
-        "latterID": None,
-        "latterIP": None,
-        "latterPort": None
+
+class CreateRoomRequestBody(BaseModel):
+    passcode: str
+    publickey_fingerprint: str
+    peer_ip: str
+    peer_port: int
+
+
+class JoinRoomRequestBody(BaseModel):
+    passcode: str
+
+
+class JoinRoomResponseBody(BaseModel):
+    publickey_fingerprint: str
+    peer_ip: str
+    peer_port: int
+
+
+@app.post("/api/v1/room/create")
+def create_room(body: CreateRoomRequestBody):
+    room_id = str(uuid.uuid4())[:8]  # short id, easy to share/type
+    rooms[room_id] = {
+        "passcode": body.passcode,
+        "publickey_fingerprint": body.publickey_fingerprint,
+        "peer_ip": body.peer_ip,
+        "peer_port": body.peer_port,
     }
+    return room_id  # matches response.text() on the Rust side
 
-    # Insert into supabase
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}"
-    headers = {
-        "apikey": SUPABASE_API_KEY,
-        "Authorization": f"Bearer {SUPABASE_API_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation"
-    }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, headers=headers, json=row)
-        if resp.status_code not in (200, 201):
-            return JSONResponse(
-                status_code=resp.status_code,
-                content={"error": resp.text}
-            )
+@app.post("/api/v1/room/join/{room_id}")
+def join_room(room_id: str, body: JoinRoomRequestBody):
+    room = rooms.get(room_id)
 
-        # On success, return the created roomId
-        return {"roomId": room_id}
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
 
-app.include_router(api_router)
+    if room["passcode"] != body.passcode:
+        raise HTTPException(status_code=403, detail="Invalid passcode")
+
+    # Return Peer A's connection info + fingerprint so Peer B can
+    # dial them directly and verify their cert against this fingerprint
+    return JoinRoomResponseBody(
+        publickey_fingerprint=room["publickey_fingerprint"],
+        peer_ip=room["peer_ip"],
+        peer_port=room["peer_port"],
+    )
+
+if os.getenv("ENV") != "production":
+    @app.get("/api/v1/room/debug")
+    def debug_rooms():
+        return rooms

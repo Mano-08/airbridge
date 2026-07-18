@@ -1,36 +1,55 @@
-// stun_utils.rs
 use std::net::{SocketAddr, UdpSocket};
-use stun::message::{Message, BINDING_REQUEST, Getter};
-use stun::xoraddr::XorMappedAddress;
+use std::time::Instant;
 
-pub async fn get_public_address(local_port: u16) -> Result<SocketAddr, anyhow::Error> {
-    // Bind to all interfaces on the specified port
-    let socket = UdpSocket::bind(format!("0.0.0.0:{}", local_port))?;
-    socket.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+use bytes::BytesMut;
+use rtc_shared::{TaggedBytesMut, TransportContext, TransportProtocol};
+use rtc_stun::client::ClientBuilder;
+use rtc_stun::message::{Getter, Message, BINDING_REQUEST, TransactionId};
+use rtc_stun::xoraddr::XorMappedAddress;
+use sansio::Protocol;
 
-    // Connect to a public Google STUN server
-    let stun_server: SocketAddr = "74.125.250.129:19302".parse()?; // stun.l.google.com:19302
-    socket.connect(stun_server)?;
+pub fn get_public_address(local_port: u16) -> Result<SocketAddr, anyhow::Error> {
+    let server = String::from("stun.l.google.com:19302");
+    let conn = UdpSocket::bind(format!("0.0.0.0:{local_port}"))?;
+    conn.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    conn.connect(server)?;
 
-    // Construct STUN binding request
+    let mut client = ClientBuilder::new().build(
+        conn.local_addr()?,
+        conn.peer_addr()?,
+        TransportProtocol::UDP,
+    )?;
+
     let mut msg = Message::new();
-    msg.build(&[Box::new(BINDING_REQUEST)])?;
+    msg.build(&[Box::<TransactionId>::default(), Box::new(BINDING_REQUEST)])?;
+    client.handle_write(msg)?;
+    while let Some(transmit) = client.poll_write() {
+        conn.send(&transmit.message)?;
+    }
 
-    // Send request
-    socket.send(msg.raw())?;
+    let mut buf = vec![0u8; 1500];
+    let n = conn.recv(&mut buf)?;
+    client.handle_read(TaggedBytesMut {
+        now: Instant::now(),
+        transport: TransportContext {
+            local_addr: conn.local_addr()?,
+            peer_addr: conn.peer_addr()?,
+            transport_protocol: TransportProtocol::UDP,
+            ecn: None,
+        },
+        message: BytesMut::from(&buf[..n]),
+    })?;
 
-    // Receive response
-    let mut buf = [0u8; 1024];
-    let len = socket.recv(&mut buf)?;
+    let public_addr = if let Some(event) = client.poll_event() {
+        let msg = event.result?;
+        let mut xor_addr = XorMappedAddress::default();
+        xor_addr.get_from(&msg)?;
+        SocketAddr::new(xor_addr.ip, xor_addr.port)
+    } else {
+        anyhow::bail!("no STUN response received");
+    };
 
-    let mut response = Message::new();
-    response.set_raw(buf[..len].to_vec());
-    response.decode()?;
+    client.close()?;
 
-    // Extract XOR Mapped Address (our public IP and Port)
-    let mut xor_addr = XorMappedAddress::default();
-    xor_addr.get_from(&response)?;
-
-    let public_addr = SocketAddr::new(xor_addr.ip, xor_addr.port);
     Ok(public_addr)
 }

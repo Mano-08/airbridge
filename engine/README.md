@@ -1,18 +1,12 @@
-# Requirements
-
-[] 1. create a room
-[] 2. store the info in DB
-[] 3. when someone tries to join the room establish QUIC connection
-[] 4. share data
-
-# Architecture
-
-FE:
-homepage
-join room
-create room
-room page
-
-Fnx Req:
-create room: create room in DB with IP + port address
-join room: joins a room with IP + port address
+1. D prompt passcode from user
+2. D get the public address from stun
+3. D create room
+4. D join room enter passcode + room_id
+5. get the fingerprint
+6. mTLS started by peer B
+7. peer B sends ClientHello
+8. peer A responds with ServerHello
+9. peer B verifys the identity of peer A
+10. peer B sends back the passcode
+11. peer A validates the passcode
+12. now peer A and peer B can transfer files
