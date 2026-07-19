@@ -2,6 +2,8 @@ use rcgen::{generate_simple_self_signed, CertifiedKey};
 use sha2::{Digest, Sha256};
 use x509_parser::prelude::*;
 
+use crate::types::EngineError;
+
 /// Holds everything you need: the PEM cert/key to use locally,
 /// and the fingerprint to hand to the peer for verification.
 pub struct SelfSignedIdentity {
@@ -14,7 +16,7 @@ pub struct SelfSignedIdentity {
     pub pubkey_fingerprint_sha256: String,
 }
 
-pub fn generate_self_signed_identity(subject_alt_names: Vec<String>) -> Result<SelfSignedIdentity, anyhow::Error> {
+pub fn generate_self_signed_identity(subject_alt_names: Vec<String>) -> Result<SelfSignedIdentity, EngineError> {
     // Generates a self-signed cert + keypair for the given SANs (e.g. "localhost", "peerA.local")
     let CertifiedKey { cert, signing_key } = generate_simple_self_signed(subject_alt_names)?;
 
@@ -47,7 +49,7 @@ fn sha256_hex(data: &[u8]) -> String {
 
 /// Parses the DER certificate to pull out the SubjectPublicKeyInfo bytes.
 /// Uses `x509-parser` under the hood for correctness instead of hand-rolling ASN.1 parsing.
-fn extract_spki_der(cert_der: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+fn extract_spki_der(cert_der: &[u8]) -> Result<Vec<u8>, EngineError> {
     let (_, cert) = X509Certificate::from_der(cert_der)?;
     Ok(cert.public_key().raw.to_vec())
 }

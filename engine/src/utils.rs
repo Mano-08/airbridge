@@ -1,3 +1,4 @@
+use crate::db::RoomStore;  
 use std::net::SocketAddr;
 use reqwest::Client;
 use crate::constants::BACKEND_URL;
@@ -44,5 +45,7 @@ pub async fn handle_create_room(
                                 .await?;
                             
     let room_id = response.text().await?;
+    let store = RoomStore::open("rooms.redb")?;
+    store.store_room(&room_id, &body)?;
     Ok(room_id)
 }

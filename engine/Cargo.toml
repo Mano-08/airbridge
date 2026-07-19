@@ -8,7 +8,7 @@ crate-type = ["cdylib", "staticlib"]
 name = "engine"
 
 [dependencies]
-uniffi = { version = "0.25.3", features = [ "cli" ] }
+uniffi = { version = "0.25.3", features = ["build", "cli"] }
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 rtc-stun = "0.9.0"
@@ -23,3 +23,8 @@ serde = "1.0.228"
 sha2 = "0.10"
 hex = "0.4"
 x509-parser = "0.18.1"
+redb = "4.1.0"
+uuid = "1.24.0"
+serde_json = "1.0.150"
+thiserror = "2.0.19"
+

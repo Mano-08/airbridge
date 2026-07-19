@@ -8,7 +8,9 @@ use rtc_stun::message::{Getter, Message, BINDING_REQUEST, TransactionId};
 use rtc_stun::xoraddr::XorMappedAddress;
 use sansio::Protocol;
 
-pub fn get_public_address(local_port: u16) -> Result<SocketAddr, anyhow::Error> {
+use crate::types::EngineError;
+
+pub fn get_public_address(local_port: u16) -> Result<SocketAddr, EngineError> {
     let server = String::from("stun.l.google.com:19302");
     let conn = UdpSocket::bind(format!("0.0.0.0:{local_port}"))?;
     conn.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
@@ -46,7 +48,7 @@ pub fn get_public_address(local_port: u16) -> Result<SocketAddr, anyhow::Error> 
         xor_addr.get_from(&msg)?;
         SocketAddr::new(xor_addr.ip, xor_addr.port)
     } else {
-        anyhow::bail!("no STUN response received");
+        return Err(EngineError::StunNoResponse);
     };
 
     client.close()?;
