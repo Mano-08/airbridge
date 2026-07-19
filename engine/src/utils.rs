@@ -4,7 +4,7 @@ use std::time::SystemTime;
 use reqwest::Client;
 use crate::constants::BACKEND_URL;
 use crate::types::{CreateRoomRequestBody, EngineError, JoinRoomRequestBody, JoinRoomResponseBody, Room};
-use crate::crypto::generate_self_signed_identity;
+use crate::crypto::{generate_self_signed_identity, perform_handshake};
 use std::sync::OnceLock;
 
 static ENGINE_PORT: OnceLock<u16> = OnceLock::new();
@@ -27,7 +27,6 @@ pub async fn handle_join_room(
     _passcode: String
 ) -> Result<bool, EngineError> {
     let endpoint = format!("{BACKEND_URL}/api/v1/room/join/{_room_id}");
-    let _identity = generate_self_signed_identity(vec!["localhost".to_string()])?;
     let client = Client::new();
     let body = JoinRoomRequestBody {
         passcode: _passcode
@@ -38,10 +37,11 @@ pub async fn handle_join_room(
                                 .send()
                                 .await?;
                             
-    let _response_data: JoinRoomResponseBody = response.json().await?;
-    let joined_room = perform_handshake(_response_data)?;
+    let response_data: JoinRoomResponseBody = response.json().await?;
+    let joined_room = perform_handshake(response_data).await?;
     Ok(joined_room)
 }
+
 
 pub async fn handle_create_room(
     _passcode: String,

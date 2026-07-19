@@ -49,6 +49,15 @@ pub enum EngineError {
 
     #[error("port not set — call set_port first")]
     PortNotSet,
+
+    #[error("TLS setup error: {0}")]
+    TlsSetupError(String),
+
+    #[error("TLS handshake failed: {0}")]
+    TlsHandshakeError(String),
+
+    #[error("connection error: {0}")]
+    ConnectionError(String),
 }
 
 
@@ -83,7 +92,15 @@ pub struct JoinRoomRequestBody {
 
 #[derive(Debug, Deserialize)]
 pub struct JoinRoomResponseBody {
-    publickey_fingerprint: String,
-    peer_ip: String,
-    peer_port: u16
+    pub publickey_fingerprint: String,
+    pub peer_ip: String,
+    pub peer_port: u16
+}
+
+pub struct SelfSignedIdentity {
+    pub cert_pem: String,
+    pub key_pem: String,
+    pub cert_der: Vec<u8>,
+    pub cert_fingerprint_sha256: String,
+    pub pubkey_fingerprint_sha256: String,
 }
