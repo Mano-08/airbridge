@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::{net::IpAddr, time::SystemTime};
 use serde::{Deserialize, Serialize};
 use x509_parser::error::X509Error;
 
@@ -43,47 +43,12 @@ pub enum EngineError {
 
     #[error("no STUN response received")]
     StunNoResponse,
-}
 
-// impl std::fmt::Display for EngineError {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         match self {
-//             Self::RequestError(error) => write!(f, "{error}"),
-//             Self::DatabaseError(error) => write!(f, "{error}")
-//         }
-//     }
-// }
+    #[error("port already set error")]
+    PortAlreadySet,
 
-// impl std::error::Error for EngineError {}
-
-// impl From<anyhow::Error> for EngineError {
-//     fn from(err: anyhow::Error) -> Self {
-//         Self::Generic(err.to_string())
-//     }
-// }
-
-// impl From<std::io::Error> for EngineError {
-//     fn from(err: std::io::Error) -> Self {
-//         Self::Generic(err.to_string())
-//     }
-// }
-
-// impl From<redb::Error> for EngineError {
-//     fn from(err: redb::Error) -> Self {
-//         EngineError::DatabaseError(err)
-//     }
-// }
-
-// impl From<reqwest::Error> for EngineError {
-//     fn from(err: reqwest::Error) -> Self {
-//         EngineError::RequestError(err)
-//     }
-// }
-
-
-pub struct PeerInfo {
-    pub ip_address: String,
-    pub port: u16,
+    #[error("port not set — call set_port first")]
+    PortNotSet,
 }
 
 
@@ -93,6 +58,20 @@ pub struct CreateRoomRequestBody {
     pub publickey_fingerprint: String,
     pub peer_ip: IpAddr,
     pub peer_port: u16
+} 
+
+#[derive(Debug, Serialize, Deserialize, Clone, uniffi::Record)]
+pub struct Room {
+    pub room_id: String,
+    pub passcode: String,
+    pub publickey_fingerprint: String,
+    pub peer_ip: String,
+    pub peer_port: u16,
+    pub file_name: String,
+    pub file_hash: String,
+    pub sent: u32,
+    pub total: u32,
+    pub created_at: SystemTime,
 } 
  
 
