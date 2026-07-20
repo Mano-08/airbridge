@@ -1,3 +1,4 @@
-/engine/macos
-/engine/ios
-/engine/target
+Engine.xcframework
+/engine/target/
+.DS_Store
+xcuserdata/

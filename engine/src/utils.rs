@@ -6,6 +6,7 @@ use crate::constants::BACKEND_URL;
 use crate::types::{CreateRoomRequestBody, EngineError, JoinRoomRequestBody, JoinRoomResponseBody, Room};
 use crate::crypto::{generate_self_signed_identity, perform_handshake};
 use std::sync::OnceLock;
+use crate::db::RoomOperations;
 
 static ENGINE_PORT: OnceLock<u16> = OnceLock::new();
 
@@ -64,7 +65,7 @@ pub async fn handle_create_room(
                                 .await?;
                             
     let room_id = response.text().await?;
-    let store = RoomStore::open(&format!("rooms_{_port}.redb"))?;
+    let store = RoomStore::open(&format!("room_{_port}.redb"))?;
 
     let room = Room {
         room_id: room_id.clone(),

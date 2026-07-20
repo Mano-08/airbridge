@@ -7,8 +7,16 @@ pub struct RoomStore {
     db: Database,
 }
 
-impl RoomStore {
-    pub fn open(path: &str) -> Result<Self, EngineError> {
+pub trait RoomOperations {
+    fn open(path: &str) -> Result<RoomStore, EngineError>;
+    fn store_room(&self, room_id: &str, body: &Room) -> Result<(), EngineError>;
+    fn get_room(&self, room_id: &str) -> Result<Option<Room>, EngineError>;
+    fn get_rooms(&self) -> Result<Vec<Room>, EngineError>;
+    fn delete_room(&self, room_id: &str) -> Result<(), EngineError>;
+}
+
+impl RoomOperations for RoomStore {
+    fn open(path: &str) -> Result<Self, EngineError> {
         let db = Database::create(path)?;
         let write_txn = db.begin_write()?;
         {
@@ -18,8 +26,7 @@ impl RoomStore {
         Ok(Self { db })
     }
 
-    /// Stores a room under the given room_id (overwrites if it already exists).
-    pub fn store_room(&self, room_id: &str, body: &Room) -> Result<(), EngineError> {
+    fn store_room(&self, room_id: &str, body: &Room) -> Result<(), EngineError> {
         let serialized = serde_json::to_vec(body)?;
         let write_txn = self.db.begin_write()?;
         {
@@ -30,7 +37,7 @@ impl RoomStore {
         Ok(())
     }
 
-    pub fn get_room(&self, room_id: &str) -> Result<Option<Room>, EngineError> {
+    fn get_room(&self, room_id: &str) -> Result<Option<Room>, EngineError> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(ROOMS_TABLE)?;
     
@@ -44,7 +51,7 @@ impl RoomStore {
         }
     }
 
-    pub fn get_rooms(&self) -> Result<Vec<Room>, EngineError> {
+    fn get_rooms(&self) -> Result<Vec<Room>, EngineError> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(ROOMS_TABLE)?;
     
@@ -60,10 +67,7 @@ impl RoomStore {
         Ok(rooms)
     }
 
-
-
-    /// Deletes a room by room_id.
-    pub fn delete_room(&self, room_id: &str) -> Result<(), EngineError> {
+    fn delete_room(&self, room_id: &str) -> Result<(), EngineError> {
         let write_txn = self.db.begin_write()?;
         {
             let mut table = write_txn.open_table(ROOMS_TABLE)?;

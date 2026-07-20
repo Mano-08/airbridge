@@ -585,6 +585,15 @@ public enum EngineError {
     // Simple error enums only carry a message
     case PortNotSet(message: String)
     
+    // Simple error enums only carry a message
+    case TlsSetupError(message: String)
+    
+    // Simple error enums only carry a message
+    case TlsHandshakeError(message: String)
+    
+    // Simple error enums only carry a message
+    case ConnectionError(message: String)
+    
 
     fileprivate static func uniffiErrorHandler(_ error: RustBuffer) throws -> Error {
         return try FfiConverterTypeEngineError.lift(error)
@@ -662,6 +671,18 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
+        case 16: return .TlsSetupError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 17: return .TlsHandshakeError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 18: return .ConnectionError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -703,6 +724,12 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(14))
         case .PortNotSet(_ /* message is ignored*/):
             writeInt(&buf, Int32(15))
+        case .TlsSetupError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(16))
+        case .TlsHandshakeError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(17))
+        case .ConnectionError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(18))
 
         
         }

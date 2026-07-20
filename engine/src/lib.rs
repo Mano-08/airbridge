@@ -9,6 +9,7 @@ mod db;
 
 use tokio::runtime::Runtime;
 use crate::db::RoomStore;
+use crate::db::RoomOperations;
 use crate::types::{EngineError, Room};
 use crate::utils::{get_port, handle_create_room, handle_join_room, set_port};
 
