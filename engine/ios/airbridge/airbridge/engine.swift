@@ -421,7 +421,7 @@ fileprivate struct FfiConverterTimestamp: FfiConverterRustBuffer {
 public struct Room {
     public var roomId: String
     public var passcode: String
-    public var publickeyFingerprint: String
+    public var certFingerprint: String
     public var peerIp: String
     public var peerPort: UInt16
     public var fileName: String
@@ -432,10 +432,10 @@ public struct Room {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(roomId: String, passcode: String, publickeyFingerprint: String, peerIp: String, peerPort: UInt16, fileName: String, fileHash: String, sent: UInt32, total: UInt32, createdAt: Date) {
+    public init(roomId: String, passcode: String, certFingerprint: String, peerIp: String, peerPort: UInt16, fileName: String, fileHash: String, sent: UInt32, total: UInt32, createdAt: Date) {
         self.roomId = roomId
         self.passcode = passcode
-        self.publickeyFingerprint = publickeyFingerprint
+        self.certFingerprint = certFingerprint
         self.peerIp = peerIp
         self.peerPort = peerPort
         self.fileName = fileName
@@ -455,7 +455,7 @@ extension Room: Equatable, Hashable {
         if lhs.passcode != rhs.passcode {
             return false
         }
-        if lhs.publickeyFingerprint != rhs.publickeyFingerprint {
+        if lhs.certFingerprint != rhs.certFingerprint {
             return false
         }
         if lhs.peerIp != rhs.peerIp {
@@ -485,7 +485,7 @@ extension Room: Equatable, Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(roomId)
         hasher.combine(passcode)
-        hasher.combine(publickeyFingerprint)
+        hasher.combine(certFingerprint)
         hasher.combine(peerIp)
         hasher.combine(peerPort)
         hasher.combine(fileName)
@@ -502,7 +502,7 @@ public struct FfiConverterTypeRoom: FfiConverterRustBuffer {
         return try Room(
             roomId: FfiConverterString.read(from: &buf), 
             passcode: FfiConverterString.read(from: &buf), 
-            publickeyFingerprint: FfiConverterString.read(from: &buf), 
+            certFingerprint: FfiConverterString.read(from: &buf), 
             peerIp: FfiConverterString.read(from: &buf), 
             peerPort: FfiConverterUInt16.read(from: &buf), 
             fileName: FfiConverterString.read(from: &buf), 
@@ -516,7 +516,7 @@ public struct FfiConverterTypeRoom: FfiConverterRustBuffer {
     public static func write(_ value: Room, into buf: inout [UInt8]) {
         FfiConverterString.write(value.roomId, into: &buf)
         FfiConverterString.write(value.passcode, into: &buf)
-        FfiConverterString.write(value.publickeyFingerprint, into: &buf)
+        FfiConverterString.write(value.certFingerprint, into: &buf)
         FfiConverterString.write(value.peerIp, into: &buf)
         FfiConverterUInt16.write(value.peerPort, into: &buf)
         FfiConverterString.write(value.fileName, into: &buf)
@@ -593,6 +593,12 @@ public enum EngineError {
     
     // Simple error enums only carry a message
     case ConnectionError(message: String)
+    
+    // Simple error enums only carry a message
+    case RoomNotFound(message: String)
+    
+    // Simple error enums only carry a message
+    case InvalidPasscode(message: String)
     
 
     fileprivate static func uniffiErrorHandler(_ error: RustBuffer) throws -> Error {
@@ -683,6 +689,14 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
+        case 19: return .RoomNotFound(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 20: return .InvalidPasscode(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -730,6 +744,10 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(17))
         case .ConnectionError(_ /* message is ignored*/):
             writeInt(&buf, Int32(18))
+        case .RoomNotFound(_ /* message is ignored*/):
+            writeInt(&buf, Int32(19))
+        case .InvalidPasscode(_ /* message is ignored*/):
+            writeInt(&buf, Int32(20))
 
         
         }

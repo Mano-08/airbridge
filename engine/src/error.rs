@@ -1,5 +1,3 @@
-use std::{net::IpAddr, time::SystemTime};
-use serde::{Deserialize, Serialize};
 use x509_parser::error::X509Error;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -84,51 +82,4 @@ pub enum EngineError {
     // 19
     #[error("invalid passcode")]
     InvalidPasscode,
-}
-
-
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CreateRoomRequestBody {
-    pub passcode: String,
-    pub cert_fingerprint: String,
-    pub peer_ip: IpAddr,
-    pub peer_port: u16
-} 
-
-#[derive(Debug, Serialize, Deserialize, Clone, uniffi::Record)]
-pub struct Room {
-    pub room_id: String,
-    pub passcode: String,
-    pub cert_fingerprint: String,
-    pub peer_ip: String,
-    pub peer_port: u16,
-    pub file_name: String,
-    pub file_hash: String,
-    pub sent: u32,
-    pub total: u32,
-    pub created_at: SystemTime,
-} 
- 
-
-#[derive(Serialize)]
-pub struct JoinRoomRequestBody {
-    pub passcode: String,
-}
-
-
-#[derive(Debug, Deserialize)]
-pub struct JoinRoomResponseBody {
-    pub cert_fingerprint: String,
-    pub peer_ip: String,
-    pub peer_port: u16
-}
-
-#[derive(Debug, Clone)]
-pub struct SelfSignedIdentity {
-    pub cert_pem: String,
-    pub key_pem: String,
-    pub cert_der: Vec<u8>,
-    pub cert_fingerprint_sha256: String,
-    pub pubkey_fingerprint_sha256: String,
 }

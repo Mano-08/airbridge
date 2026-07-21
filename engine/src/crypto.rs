@@ -1,13 +1,18 @@
 use rcgen::{generate_simple_self_signed, CertifiedKey};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use sha2::{Digest, Sha256};
+use tokio_rustls::server::TlsStream;
+use crate::db::{RoomOperations, RoomStore};
+use crate::utils::get_port;
 use x509_parser::prelude::*;
 use crate::types::{EngineError, JoinRoomResponseBody, SelfSignedIdentity};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::client::danger::{ServerCertVerifier, ServerCertVerified, HandshakeSignatureValid};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::net::TcpStream;
-use tokio_rustls::{TlsConnector};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub fn generate_self_signed_identity(subject_alt_names: Vec<String>) -> Result<SelfSignedIdentity, EngineError> {
     // Generates a self-signed cert + keypair for the given SANs (e.g. "localhost", "peerA.local")
@@ -53,6 +58,52 @@ fn extract_spki_der(cert_der: &[u8]) -> Result<Vec<u8>, EngineError> {
 #[derive(Debug)]
 struct FingerprintPinningVerifier {
     expected_fingerprint_hex: String,
+}
+
+impl ClientCertVerifier for FingerprintPinningVerifier {
+    fn offer_client_auth(&self) -> bool {
+        true
+    }
+
+    fn client_auth_mandatory(&self) -> bool {
+        true
+    }
+
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        self.check(end_entity.as_ref())?;
+        Ok(ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![SignatureScheme::ECDSA_NISTP256_SHA256]
+    }
 }
 
 impl FingerprintPinningVerifier {
@@ -160,10 +211,100 @@ pub async fn perform_handshake(
     let identity = generate_self_signed_identity(vec!["localhost".to_string()])?;
 
     let addr = format!("{}:{}", peer_data.peer_ip, peer_data.peer_port);
-    let expected_fingerprint = peer_data.publickey_fingerprint.clone();
+    let expected_fingerprint = peer_data.cert_fingerprint.clone();
 
     let stream = TcpStream::connect(&addr)
         .await
         .map_err(|e| EngineError::ConnectionError(e.to_string()))?;
     perform_client_handshake(stream, &identity, &expected_fingerprint).await
+}
+
+async fn perform_server_handshake_raw(
+    stream: TcpStream,
+    identity: &SelfSignedIdentity,
+    expected_peer_fingerprint: &str,
+) -> Result<tokio_rustls::server::TlsStream<TcpStream>, EngineError> {
+    let cert_chain = vec![CertificateDer::from(identity.cert_der.to_vec())];
+    let key = load_private_key(&identity.key_pem)?;
+
+    let verifier = Arc::new(FingerprintPinningVerifier {
+        expected_fingerprint_hex: expected_peer_fingerprint.to_string(),
+    });
+
+    let config = rustls::ServerConfig::builder()
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(cert_chain, key)
+        .map_err(|e| EngineError::TlsSetupError(e.to_string()))?;
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+
+    acceptor
+        .accept(stream)
+        .await
+        .map_err(|e| EngineError::TlsHandshakeError(e.to_string()))
+}
+
+pub async fn perform_server_handshake_entrypoint(
+    stream: TcpStream,
+    identity: &SelfSignedIdentity,
+    room_id: &str,
+    expected_client_fingerprint: &str,
+) -> Result<bool, EngineError> {
+    // Steps 7-9: mTLS handshake — rustls handles ClientHello/ServerHello
+    // internally; our FingerprintPinningVerifier checks Peer B's cert
+    // fingerprint as part of this call (step 9).
+    let mut tls_stream: TlsStream<TcpStream> = perform_server_handshake_raw(stream, identity, expected_client_fingerprint).await?;
+
+    // Step 10: read the passcode Peer B sends over the encrypted stream.
+    // Using a simple length-prefixed message: 4-byte big-endian length,
+    // followed by that many bytes of UTF-8 passcode.
+    let mut len_buf = [0u8; 4];
+    tls_stream
+        .read_exact(&mut len_buf)
+        .await
+        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to read passcode length: {e}")))?;
+    let msg_len = u32::from_be_bytes(len_buf) as usize;
+
+    // Sanity check to avoid a malicious/buggy peer requesting a huge allocation
+    if msg_len > 1024 {
+        return Err(EngineError::TlsHandshakeError("passcode message too large".into()));
+    }
+
+    let mut passcode_buf = vec![0u8; msg_len];
+    tls_stream
+        .read_exact(&mut passcode_buf)
+        .await
+        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to read passcode: {e}")))?;
+    let received_passcode = String::from_utf8(passcode_buf)
+        .map_err(|_| EngineError::TlsHandshakeError("passcode was not valid UTF-8".into()))?;
+
+    let port = get_port()?;
+    // Step 11: validate against the passcode stored for this room.
+    let store = RoomStore::open(&format!("room_{port}.redb"))?;
+    let room = store
+        .get_room(room_id)?
+        .ok_or(EngineError::RoomNotFound)?;
+
+    let is_valid = room.passcode == received_passcode;
+
+    // Let Peer B know whether they're in — a single byte, 1 = ok, 0 = rejected.
+    let response_byte: [u8; 1] = if is_valid { [1] } else { [0] };
+    tls_stream
+        .write_all(&response_byte)
+        .await
+        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to send auth result: {e}")))?;
+    tls_stream
+        .flush()
+        .await
+        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to flush stream: {e}")))?;
+
+    if !is_valid {
+        return Err(EngineError::InvalidPasscode);
+    }
+
+    // Step 12: peer A and peer B can now transfer files over `tls_stream`.
+    // TODO: hand `tls_stream` off to your file-transfer logic here instead
+    // of letting it drop — currently the stream closes once this function returns.
+
+    Ok(true)
 }

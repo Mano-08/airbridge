@@ -179,14 +179,35 @@ struct ContentView: View {
                     }
                 }
             }
-
+            
         case .join:
-            let roomId = roomCodeInput
-            // TODO: wire up your actual join-room FFI call, e.g.:
-            // let success = try await joinRoomSafely(roomId: roomId, passcode: passcode)
-            isLoading = false
-            errorMessage = "Join room isn't wired up yet. (room: \(roomId), passcode: \(passcode))"
+            Task {
+                do {
+                    let roomId = roomCodeInput
+                    let _ = try await joinRoomSafely(roomId: roomId, passcode: passcode)
+                    await MainActor.run {
+                        isLoading = false
+                        waitingRoomId = roomId
+                        waitingPasscode = passcode
+                        selectedRoom = nil
+                        loadRooms()
+                    }
+                } catch {
+                    await MainActor.run {
+                        isLoading = false
+                        print("Full error: \(error)")
+                        print("Error type: \(type(of: error))")
+                        errorMessage = "Couldn't join room: \(error)"
+                    }
+                }
+            }
         }
+    }
+    
+    private func joinRoomSafely(roomId: String, passcode: String) async throws -> Bool {
+        try await Task.detached(priority: .userInitiated) {
+            try await joinRoom(roomId: roomId, passcode: passcode)
+        }.value
     }
 
     private func createRoomSafely(passcode: String) async throws -> String {
@@ -224,7 +245,7 @@ struct RoomDetailContent: View {
                 LabeledContent("Room ID", value: room.roomId)
                 LabeledContent("Peer IP", value: room.peerIp)
                 LabeledContent("Peer Port", value: String(room.peerPort))
-                LabeledContent("Fingerprint", value: room.publickeyFingerprint)
+                LabeledContent("Fingerprint", value: room.certFingerprint)
                 if !room.fileHash.isEmpty {
                     LabeledContent("File hash", value: room.fileHash)
                 }

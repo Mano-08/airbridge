@@ -1,10 +1,11 @@
 use crate::db::RoomStore;  
+use std::convert::identity;
 use std::net::SocketAddr;
 use std::time::SystemTime;
 use reqwest::Client;
 use crate::constants::BACKEND_URL;
 use crate::types::{CreateRoomRequestBody, EngineError, JoinRoomRequestBody, JoinRoomResponseBody, Room};
-use crate::crypto::{generate_self_signed_identity, perform_handshake};
+use crate::crypto::{generate_self_signed_identity, perform_handshake, perform_server_handshake_entrypoint};
 use std::sync::OnceLock;
 use crate::db::RoomOperations;
 
@@ -33,7 +34,7 @@ pub async fn handle_join_room(
         passcode: _passcode
     };
     let response = client
-                                .get(endpoint)
+                                .post(endpoint)
                                 .json(&body)
                                 .send()
                                 .await?;
@@ -54,7 +55,7 @@ pub async fn handle_create_room(
     let client = Client::new();
     let body = CreateRoomRequestBody {
         passcode: _passcode,
-        publickey_fingerprint: identity.pubkey_fingerprint_sha256,
+        cert_fingerprint: identity.cert_fingerprint_sha256.clone(),
         peer_ip: _peer_info.ip(),
         peer_port: _peer_info.port()
     };
@@ -65,12 +66,15 @@ pub async fn handle_create_room(
                                 .await?;
                             
     let room_id = response.text().await?;
+    let room_id_for_room = room_id.clone();
+    let room_id_for_db = room_id.clone();
+    let room_id_for_handshake = room_id.clone();
     let store = RoomStore::open(&format!("room_{_port}.redb"))?;
 
     let room = Room {
-        room_id: room_id.clone(),
+        room_id: room_id_for_room,
         passcode: body.passcode,
-        publickey_fingerprint: body.publickey_fingerprint,
+        cert_fingerprint: body.cert_fingerprint,
         peer_ip: body.peer_ip.to_string(),
         peer_port: body.peer_port,
         file_name: String::from(""),
@@ -80,6 +84,14 @@ pub async fn handle_create_room(
         created_at: SystemTime::now()
     };
 
-    store.store_room(&room_id, &room)?;
+    store.store_room(&room_id_for_db, &room)?;
+    tokio::spawn(async move {
+        if let Ok(listener) = tokio::net::TcpListener::bind(("0.0.0.0", _port)).await {
+            if let Ok((stream, _addr)) = listener.accept().await {
+                // hand off `stream` into perform_server_handshake(...)
+                let _ = perform_server_handshake_entrypoint(stream, &identity, &room_id_for_handshake, &identity.cert_fingerprint_sha256.clone()).await;
+            }
+        }
+    });
     Ok(room_id)
 }

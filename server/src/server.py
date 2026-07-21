@@ -12,7 +12,7 @@ rooms: dict[str, dict] = {}
 
 class CreateRoomRequestBody(BaseModel):
     passcode: str
-    publickey_fingerprint: str
+    cert_fingerprint: str
     peer_ip: str
     peer_port: int
 
@@ -22,7 +22,7 @@ class JoinRoomRequestBody(BaseModel):
 
 
 class JoinRoomResponseBody(BaseModel):
-    publickey_fingerprint: str
+    cert_fingerprint: str
     peer_ip: str
     peer_port: int
 
@@ -32,7 +32,7 @@ def create_room(body: CreateRoomRequestBody):
     room_id = str(uuid.uuid4())[:8]  # short id, easy to share/type
     rooms[room_id] = {
         "passcode": body.passcode,
-        "publickey_fingerprint": body.publickey_fingerprint,
+        "cert_fingerprint": body.cert_fingerprint,
         "peer_ip": body.peer_ip,
         "peer_port": body.peer_port,
     }
@@ -52,7 +52,7 @@ def join_room(room_id: str, body: JoinRoomRequestBody):
     # Return Peer A's connection info + fingerprint so Peer B can
     # dial them directly and verify their cert against this fingerprint
     return JoinRoomResponseBody(
-        publickey_fingerprint=room["publickey_fingerprint"],
+        cert_fingerprint=room["cert_fingerprint"],
         peer_ip=room["peer_ip"],
         peer_port=room["peer_port"],
     )
