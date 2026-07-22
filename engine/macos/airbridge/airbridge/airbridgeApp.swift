@@ -10,16 +10,24 @@ import SwiftUI
 @main
 struct airbridgeApp: App {
     init() {
-            do {
-                try configurePort(port: AppConfig.port)
-            } catch {
-                print("Failed to configure engine port: \(error)")
-            }
+        let logPath = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("airbridge_\(AppConfig.port).log")
+            .path
+
+        do {
+            try configureLogging(logPath: logPath)
+            try configurePort(port: AppConfig.port)
+            print("Logging to: \(logPath)")
+        } catch {
+            print("Startup configuration failed: \(error)")
         }
+    }
     
     var body: some Scene {
         WindowGroup {
             ContentView()
+            
         }
     }
 }

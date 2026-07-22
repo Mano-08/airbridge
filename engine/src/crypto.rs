@@ -13,6 +13,7 @@ use rustls::client::danger::{ServerCertVerifier, ServerCertVerified, HandshakeSi
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
+use log::{info, debug, error};
 
 pub fn generate_self_signed_identity(subject_alt_names: Vec<String>) -> Result<SelfSignedIdentity, EngineError> {
     // Generates a self-signed cert + keypair for the given SANs (e.g. "localhost", "peerA.local")
@@ -34,8 +35,6 @@ pub fn generate_self_signed_identity(subject_alt_names: Vec<String>) -> Result<S
         cert_pem,
         key_pem,
         cert_der,
-        cert_fingerprint_sha256,
-        pubkey_fingerprint_sha256,
     })
 }
 
@@ -123,6 +122,48 @@ impl FingerprintPinningVerifier {
     }
 }
 
+pub async fn perform_server_passcode_check(
+    mut stream: TcpStream,
+    room_id: &str,
+) -> Result<bool, EngineError> {
+    info!("[server] passcode check started, room_id={}", room_id);
+
+    let mut received_hash = [0u8; 32];
+    stream.read_exact(&mut received_hash).await.map_err(|e| {
+        error!("[server] failed to read passcode hash: {}", e);
+        EngineError::ConnectionError(format!("failed to read passcode hash: {e}"))
+    })?;
+
+    let port = get_port()?;
+    let store = RoomStore::open(&format!("room_{port}.redb"))?;
+    let room = store.get_room(room_id)?.ok_or(EngineError::RoomNotFound)?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(room.passcode.as_bytes());
+    let expected_hash = hasher.finalize();
+
+    let is_valid = received_hash.as_slice() == expected_hash.as_slice();
+    debug!("[server] passcode validation result: {}", is_valid);
+
+    let response_byte: [u8; 1] = if is_valid { [1] } else { [0] };
+    stream.write_all(&response_byte).await.map_err(|e| {
+        error!("[server] failed to send auth result: {}", e);
+        EngineError::ConnectionError(format!("failed to send auth result: {e}"))
+    })?;
+    stream.flush().await.map_err(|e| {
+        error!("[server] failed to flush stream: {}", e);
+        EngineError::ConnectionError(format!("failed to flush stream: {e}"))
+    })?;
+
+    if !is_valid {
+        error!("[server] passcode invalid for room_id={}", room_id);
+        return Err(EngineError::InvalidPasscode);
+    }
+
+    info!("[server] passcode check succeeded, client authenticated for room_id={}", room_id);
+    Ok(true)
+}
+
 // Used on the TLS client side (when we're the one dialing out / joining)
 impl ServerCertVerifier for FingerprintPinningVerifier {
     fn verify_server_cert(
@@ -169,61 +210,12 @@ fn load_private_key(key_pem: &str) -> Result<PrivateKeyDer<'static>, EngineError
     Ok(key)
 }
 
-async fn perform_client_handshake(
-    stream: TcpStream,
-    identity: &SelfSignedIdentity,
-    expected_peer_fingerprint: &str,
-) -> Result<bool, EngineError> {
-    let cert_chain = vec![CertificateDer::from(identity.cert_der.to_vec())];
-    let key = load_private_key(&identity.key_pem)?;
-
-    let verifier = Arc::new(FingerprintPinningVerifier {
-        expected_fingerprint_hex: expected_peer_fingerprint.to_string(),
-    });
-
-    let config = rustls::ClientConfig::builder()
-        .dangerous() // required whenever bypassing normal CA-chain verification
-        .with_custom_certificate_verifier(verifier)
-        .with_client_auth_cert(cert_chain, key)
-        .map_err(|e| EngineError::TlsSetupError(e.to_string()))?;
-
-    let connector = TlsConnector::from(Arc::new(config));
-
-    // ServerName is required by the API but functionally unused here, since
-    // we're validating identity via fingerprint, not hostname matching.
-    let server_name = ServerName::try_from("localhost")
-        .map_err(|_| EngineError::TlsSetupError("invalid server name".into()))?
-        .to_owned();
-
-    let tls_stream = connector
-        .connect(server_name, stream)
-        .await
-        .map_err(|e| EngineError::TlsHandshakeError(e.to_string()))?;
-
-    // Handshake succeeded AND the peer's cert fingerprint matched — mutual trust established.
-    let _ = tls_stream; // keep/use this stream for the actual file transfer that follows
-    Ok(true)
-}
-
-pub async fn perform_handshake(
-    peer_data: JoinRoomResponseBody
-) -> Result<bool, EngineError> {
-    let identity = generate_self_signed_identity(vec!["localhost".to_string()])?;
-
-    let addr = format!("{}:{}", peer_data.peer_ip, peer_data.peer_port);
-    let expected_fingerprint = peer_data.cert_fingerprint.clone();
-
-    let stream = TcpStream::connect(&addr)
-        .await
-        .map_err(|e| EngineError::ConnectionError(e.to_string()))?;
-    perform_client_handshake(stream, &identity, &expected_fingerprint).await
-}
-
 async fn perform_server_handshake_raw(
     stream: TcpStream,
     identity: &SelfSignedIdentity,
     expected_peer_fingerprint: &str,
 ) -> Result<tokio_rustls::server::TlsStream<TcpStream>, EngineError> {
+    info!("[server] performing TLS handshake as server");
     let cert_chain = vec![CertificateDer::from(identity.cert_der.to_vec())];
     let key = load_private_key(&identity.key_pem)?;
 
@@ -238,10 +230,16 @@ async fn perform_server_handshake_raw(
 
     let acceptor = TlsAcceptor::from(Arc::new(config));
 
-    acceptor
+    let tls = acceptor
         .accept(stream)
         .await
-        .map_err(|e| EngineError::TlsHandshakeError(e.to_string()))
+        .map_err(|e| {
+            error!("[server] TLS handshake failed: {}", e);
+            EngineError::TlsHandshakeError(e.to_string())
+        })?;
+
+    info!("[server] TLS handshake as server succeeded with fingerprinted peer");
+    Ok(tls)
 }
 
 pub async fn perform_server_handshake_entrypoint(
@@ -250,6 +248,7 @@ pub async fn perform_server_handshake_entrypoint(
     room_id: &str,
     expected_client_fingerprint: &str,
 ) -> Result<bool, EngineError> {
+    info!("[server] handshake entrypoint started, room_id={}", room_id);
     // Steps 7-9: mTLS handshake — rustls handles ClientHello/ServerHello
     // internally; our FingerprintPinningVerifier checks Peer B's cert
     // fingerprint as part of this call (step 9).
@@ -262,11 +261,15 @@ pub async fn perform_server_handshake_entrypoint(
     tls_stream
         .read_exact(&mut len_buf)
         .await
-        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to read passcode length: {e}")))?;
+        .map_err(|e| {
+            error!("[server] failed to read passcode length: {}", e);
+            EngineError::TlsHandshakeError(format!("failed to read passcode length: {e}"))
+        })?;
     let msg_len = u32::from_be_bytes(len_buf) as usize;
 
     // Sanity check to avoid a malicious/buggy peer requesting a huge allocation
     if msg_len > 1024 {
+        error!("[server] passcode message too large (length: {})", msg_len);
         return Err(EngineError::TlsHandshakeError("passcode message too large".into()));
     }
 
@@ -274,9 +277,15 @@ pub async fn perform_server_handshake_entrypoint(
     tls_stream
         .read_exact(&mut passcode_buf)
         .await
-        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to read passcode: {e}")))?;
+        .map_err(|e| {
+            error!("[server] failed to read passcode: {}", e);
+            EngineError::TlsHandshakeError(format!("failed to read passcode: {e}"))
+        })?;
     let received_passcode = String::from_utf8(passcode_buf)
-        .map_err(|_| EngineError::TlsHandshakeError("passcode was not valid UTF-8".into()))?;
+        .map_err(|_| {
+            error!("[server] passcode was not valid UTF-8");
+            EngineError::TlsHandshakeError("passcode was not valid UTF-8".into())
+        })?;
 
     let port = get_port()?;
     // Step 11: validate against the passcode stored for this room.
@@ -286,25 +295,76 @@ pub async fn perform_server_handshake_entrypoint(
         .ok_or(EngineError::RoomNotFound)?;
 
     let is_valid = room.passcode == received_passcode;
+    debug!("[server] passcode validation result: {}", is_valid);
 
     // Let Peer B know whether they're in — a single byte, 1 = ok, 0 = rejected.
     let response_byte: [u8; 1] = if is_valid { [1] } else { [0] };
     tls_stream
         .write_all(&response_byte)
         .await
-        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to send auth result: {e}")))?;
+        .map_err(|e| {
+            error!("[server] failed to send auth result: {}", e);
+            EngineError::TlsHandshakeError(format!("failed to send auth result: {e}"))
+        })?;
     tls_stream
         .flush()
         .await
-        .map_err(|e| EngineError::TlsHandshakeError(format!("failed to flush stream: {e}")))?;
+        .map_err(|e| {
+            error!("[server] failed to flush stream: {}", e);
+            EngineError::TlsHandshakeError(format!("failed to flush stream: {e}"))
+        })?;
 
     if !is_valid {
+        error!("[server] passcode invalid for room_id={}", room_id);
         return Err(EngineError::InvalidPasscode);
     }
 
+    info!("[server] handshake entrypoint succeeded, client authenticated for room_id={}", room_id);
     // Step 12: peer A and peer B can now transfer files over `tls_stream`.
     // TODO: hand `tls_stream` off to your file-transfer logic here instead
     // of letting it drop — currently the stream closes once this function returns.
 
+    Ok(true)
+}
+
+pub async fn perform_join_passcode_send(
+    peer_data: JoinRoomResponseBody,
+    passcode: &str,
+) -> Result<bool, EngineError> {
+    let addr = format!("{}:{}", peer_data.peer_ip, peer_data.peer_port);
+
+    let mut stream = match TcpStream::connect(&addr).await {
+        Ok(s) => {
+            info!("[join] TCP connect succeeded: {}", addr);
+            s
+        }
+        Err(e) => {
+            error!("[join] TCP connect failed: {}", e);
+            return Err(EngineError::ConnectionError(e.to_string()));
+        }
+    };
+
+    let mut hasher = Sha256::new();
+    hasher.update(passcode.as_bytes());
+    let hash = hasher.finalize();
+
+    stream.write_all(&hash).await.map_err(|e| {
+        error!("[join] failed to send passcode hash: {}", e);
+        EngineError::ConnectionError(format!("failed to send passcode hash: {e}"))
+    })?;
+    stream.flush().await.map_err(|e| EngineError::ConnectionError(e.to_string()))?;
+
+    let mut response_byte = [0u8; 1];
+    stream.read_exact(&mut response_byte).await.map_err(|e| {
+        error!("[join] failed to read auth result: {}", e);
+        EngineError::ConnectionError(format!("failed to read auth result: {e}"))
+    })?;
+
+    if response_byte[0] != 1 {
+        error!("[join] passcode rejected by host");
+        return Err(EngineError::InvalidPasscode);
+    }
+
+    info!("[join] passcode accepted by host");
     Ok(true)
 }

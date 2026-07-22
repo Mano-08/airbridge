@@ -421,7 +421,6 @@ fileprivate struct FfiConverterTimestamp: FfiConverterRustBuffer {
 public struct Room {
     public var roomId: String
     public var passcode: String
-    public var certFingerprint: String
     public var peerIp: String
     public var peerPort: UInt16
     public var fileName: String
@@ -429,13 +428,13 @@ public struct Room {
     public var sent: UInt32
     public var total: UInt32
     public var createdAt: Date
+    public var connected: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(roomId: String, passcode: String, certFingerprint: String, peerIp: String, peerPort: UInt16, fileName: String, fileHash: String, sent: UInt32, total: UInt32, createdAt: Date) {
+    public init(roomId: String, passcode: String, peerIp: String, peerPort: UInt16, fileName: String, fileHash: String, sent: UInt32, total: UInt32, createdAt: Date, connected: Bool) {
         self.roomId = roomId
         self.passcode = passcode
-        self.certFingerprint = certFingerprint
         self.peerIp = peerIp
         self.peerPort = peerPort
         self.fileName = fileName
@@ -443,6 +442,7 @@ public struct Room {
         self.sent = sent
         self.total = total
         self.createdAt = createdAt
+        self.connected = connected
     }
 }
 
@@ -453,9 +453,6 @@ extension Room: Equatable, Hashable {
             return false
         }
         if lhs.passcode != rhs.passcode {
-            return false
-        }
-        if lhs.certFingerprint != rhs.certFingerprint {
             return false
         }
         if lhs.peerIp != rhs.peerIp {
@@ -479,13 +476,15 @@ extension Room: Equatable, Hashable {
         if lhs.createdAt != rhs.createdAt {
             return false
         }
+        if lhs.connected != rhs.connected {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(roomId)
         hasher.combine(passcode)
-        hasher.combine(certFingerprint)
         hasher.combine(peerIp)
         hasher.combine(peerPort)
         hasher.combine(fileName)
@@ -493,6 +492,7 @@ extension Room: Equatable, Hashable {
         hasher.combine(sent)
         hasher.combine(total)
         hasher.combine(createdAt)
+        hasher.combine(connected)
     }
 }
 
@@ -502,21 +502,20 @@ public struct FfiConverterTypeRoom: FfiConverterRustBuffer {
         return try Room(
             roomId: FfiConverterString.read(from: &buf), 
             passcode: FfiConverterString.read(from: &buf), 
-            certFingerprint: FfiConverterString.read(from: &buf), 
             peerIp: FfiConverterString.read(from: &buf), 
             peerPort: FfiConverterUInt16.read(from: &buf), 
             fileName: FfiConverterString.read(from: &buf), 
             fileHash: FfiConverterString.read(from: &buf), 
             sent: FfiConverterUInt32.read(from: &buf), 
             total: FfiConverterUInt32.read(from: &buf), 
-            createdAt: FfiConverterTimestamp.read(from: &buf)
+            createdAt: FfiConverterTimestamp.read(from: &buf), 
+            connected: FfiConverterBool.read(from: &buf)
         )
     }
 
     public static func write(_ value: Room, into buf: inout [UInt8]) {
         FfiConverterString.write(value.roomId, into: &buf)
         FfiConverterString.write(value.passcode, into: &buf)
-        FfiConverterString.write(value.certFingerprint, into: &buf)
         FfiConverterString.write(value.peerIp, into: &buf)
         FfiConverterUInt16.write(value.peerPort, into: &buf)
         FfiConverterString.write(value.fileName, into: &buf)
@@ -524,6 +523,7 @@ public struct FfiConverterTypeRoom: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.sent, into: &buf)
         FfiConverterUInt32.write(value.total, into: &buf)
         FfiConverterTimestamp.write(value.createdAt, into: &buf)
+        FfiConverterBool.write(value.connected, into: &buf)
     }
 }
 
@@ -599,6 +599,9 @@ public enum EngineError {
     
     // Simple error enums only carry a message
     case InvalidPasscode(message: String)
+    
+    // Simple error enums only carry a message
+    case NotFound(message: String)
     
 
     fileprivate static func uniffiErrorHandler(_ error: RustBuffer) throws -> Error {
@@ -697,6 +700,10 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
+        case 21: return .NotFound(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -748,6 +755,8 @@ public struct FfiConverterTypeEngineError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(19))
         case .InvalidPasscode(_ /* message is ignored*/):
             writeInt(&buf, Int32(20))
+        case .NotFound(_ /* message is ignored*/):
+            writeInt(&buf, Int32(21))
 
         
         }
@@ -781,6 +790,15 @@ fileprivate struct FfiConverterSequenceTypeRoom: FfiConverterRustBuffer {
     }
 }
 
+public func configureLogging(logPath: String) throws {
+    try rustCallWithError(FfiConverterTypeEngineError.lift) {
+    uniffi_engine_fn_func_configure_logging(
+        FfiConverterString.lower(logPath),$0)
+}
+}
+
+
+
 public func configurePort(port: UInt16) throws {
     try rustCallWithError(FfiConverterTypeEngineError.lift) {
     uniffi_engine_fn_func_configure_port(
@@ -795,6 +813,14 @@ public func createRoom(passcode: String) throws -> String {
         try rustCallWithError(FfiConverterTypeEngineError.lift) {
     uniffi_engine_fn_func_create_room(
         FfiConverterString.lower(passcode),$0)
+}
+    )
+}
+
+public func debugClearRoomDb() throws -> String {
+    return try  FfiConverterString.lift(
+        try rustCallWithError(FfiConverterTypeEngineError.lift) {
+    uniffi_engine_fn_func_debug_clear_room_db($0)
 }
     )
 }
@@ -832,10 +858,16 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_engine_checksum_func_configure_logging() != 8364) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_engine_checksum_func_configure_port() != 62967) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_engine_checksum_func_create_room() != 8650) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_engine_checksum_func_debug_clear_room_db() != 42836) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_engine_checksum_func_get_rooms() != 58138) {

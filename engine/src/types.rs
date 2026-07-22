@@ -84,6 +84,10 @@ pub enum EngineError {
     // 19
     #[error("invalid passcode")]
     InvalidPasscode,
+
+    // 20
+    #[error("not found: {0}")]
+    NotFound(String),
 }
 
 
@@ -91,7 +95,6 @@ pub enum EngineError {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CreateRoomRequestBody {
     pub passcode: String,
-    pub cert_fingerprint: String,
     pub peer_ip: IpAddr,
     pub peer_port: u16
 } 
@@ -100,7 +103,6 @@ pub struct CreateRoomRequestBody {
 pub struct Room {
     pub room_id: String,
     pub passcode: String,
-    pub cert_fingerprint: String,
     pub peer_ip: String,
     pub peer_port: u16,
     pub file_name: String,
@@ -108,7 +110,10 @@ pub struct Room {
     pub sent: u32,
     pub total: u32,
     pub created_at: SystemTime,
+    pub connected: bool,
 } 
+
+
  
 
 #[derive(Serialize)]
@@ -117,9 +122,8 @@ pub struct JoinRoomRequestBody {
 }
 
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct JoinRoomResponseBody {
-    pub cert_fingerprint: String,
     pub peer_ip: String,
     pub peer_port: u16
 }
@@ -129,6 +133,4 @@ pub struct SelfSignedIdentity {
     pub cert_pem: String,
     pub key_pem: String,
     pub cert_der: Vec<u8>,
-    pub cert_fingerprint_sha256: String,
-    pub pubkey_fingerprint_sha256: String,
 }

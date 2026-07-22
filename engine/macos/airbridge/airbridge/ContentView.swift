@@ -43,6 +43,8 @@ struct ContentView: View {
 
     @State private var waitingRoomId: String? = nil
     @State private var waitingPasscode: String? = nil
+    
+    @State private var joinedRoomId: String? = nil
 
     var body: some View {
         NavigationSplitView {
@@ -81,7 +83,18 @@ struct ContentView: View {
             // MARK: Detail pane
             VStack(spacing: 20) {
                 if let waitingRoomId, let waitingPasscode {
-                    WaitingForFriendContent(roomId: waitingRoomId, passcode: waitingPasscode)
+                    WaitingForFriendContent(
+                            roomId: waitingRoomId,
+                            passcode: waitingPasscode,
+                            onConnected: {
+                                self.waitingRoomId = nil
+                                self.waitingPasscode = nil
+                                self.joinedRoomId = waitingRoomId   // reuse the same success screen
+                                self.loadRooms()
+                            }
+                        )
+                } else if let joinedRoomId {
+                    JoinedRoomContent(roomId: joinedRoomId)   // NEW
                 } else if let room = selectedRoom {
                     RoomDetailContent(room: room)
                 } else {
@@ -126,6 +139,16 @@ struct ContentView: View {
                     }
                     .disabled(isLoading)
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button("🗑 Clear DB") {
+                        do {
+                            let result = try debugClearRoomDb()
+                            print("Clear DB result: \(result)")
+                        } catch {
+                            print("Clear DB failed: \(error)")
+                        }
+                    }
+                }
             }
         }
         .alert(
@@ -154,55 +177,55 @@ struct ContentView: View {
     }
 
     private func handlePasscodeSubmit() {
-        guard let action = pendingAction else { return }
-        let passcode = passcodeInput
+            guard let action = pendingAction else { return }
+            let passcode = passcodeInput
 
-        errorMessage = nil
-        isLoading = true
+            errorMessage = nil
+            isLoading = true
 
-        switch action {
-        case .create:
-            Task {
-                do {
-                    let roomId = try await createRoomSafely(passcode: passcode)
-                    await MainActor.run {
-                        isLoading = false
-                        waitingRoomId = roomId
-                        waitingPasscode = passcode
-                        selectedRoom = nil
-                        loadRooms()
-                    }
-                } catch {
-                    await MainActor.run {
-                        isLoading = false
-                        errorMessage = "Couldn't create room: \(error.localizedDescription)"
+            switch action {
+            case .create:
+                Task {
+                    do {
+                        let roomId = try await createRoomSafely(passcode: passcode)
+                        await MainActor.run {
+                            isLoading = false
+                            waitingRoomId = roomId
+                            waitingPasscode = passcode
+                            joinedRoomId = nil
+                            selectedRoom = nil
+                            loadRooms()
+                        }
+                    } catch {
+                        await MainActor.run {
+                            isLoading = false
+                            errorMessage = "Couldn't create room: \(error.localizedDescription)"
+                        }
                     }
                 }
-            }
-            
-        case .join:
-            Task {
-                do {
-                    let roomId = roomCodeInput
-                    let _ = try await joinRoomSafely(roomId: roomId, passcode: passcode)
-                    await MainActor.run {
-                        isLoading = false
-                        waitingRoomId = roomId
-                        waitingPasscode = passcode
-                        selectedRoom = nil
-                        loadRooms()
-                    }
-                } catch {
-                    await MainActor.run {
-                        isLoading = false
-                        print("Full error: \(error)")
-                        print("Error type: \(type(of: error))")
-                        errorMessage = "Couldn't join room: \(error)"
+
+            case .join:
+                Task {
+                    do {
+                        let roomId = roomCodeInput
+                        let _ = try await joinRoomSafely(roomId: roomId, passcode: passcode)
+                        await MainActor.run {
+                            isLoading = false
+                            waitingRoomId = nil
+                            waitingPasscode = nil
+                            selectedRoom = nil
+                            joinedRoomId = roomId   // NEW — just show success, no lookup needed
+                            loadRooms()
+                        }
+                    } catch {
+                        await MainActor.run {
+                            isLoading = false
+                            errorMessage = "Couldn't join room: \(error)"
+                        }
                     }
                 }
             }
         }
-    }
     
     private func joinRoomSafely(roomId: String, passcode: String) async throws -> Bool {
         try await Task.detached(priority: .userInitiated) {
@@ -245,7 +268,6 @@ struct RoomDetailContent: View {
                 LabeledContent("Room ID", value: room.roomId)
                 LabeledContent("Peer IP", value: room.peerIp)
                 LabeledContent("Peer Port", value: String(room.peerPort))
-                LabeledContent("Fingerprint", value: room.certFingerprint)
                 if !room.fileHash.isEmpty {
                     LabeledContent("File hash", value: room.fileHash)
                 }
@@ -268,8 +290,10 @@ struct RoomDetailContent: View {
 struct WaitingForFriendContent: View {
     let roomId: String
     let passcode: String
+    var onConnected: () -> Void   // NEW callback
 
     @State private var didCopy: Bool = false
+    @State private var pollTimer: Timer?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -308,8 +332,20 @@ struct WaitingForFriendContent: View {
                 Label(didCopy ? "Copied!" : "Copy invite", systemImage: didCopy ? "checkmark" : "doc.on.doc")
             }
             .buttonStyle(.bordered)
-        }
+        }.onAppear { startPolling() }
+            .onDisappear { pollTimer?.invalidate() }
     }
+    
+    private func startPolling() {
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+                if let rooms = try? getRooms(),
+                   let room = rooms.first(where: { $0.roomId == roomId }),
+                   room.connected {
+                    pollTimer?.invalidate()
+                    onConnected()
+                }
+            }
+        }
 
     private func copyDetailsToClipboard() {
         let text = "room: \(roomId) passcode: \(passcode)"
@@ -326,4 +362,26 @@ struct WaitingForFriendContent: View {
 
 #Preview {
     ContentView()
+}
+
+struct JoinedRoomContent: View {
+    let roomId: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.green)
+
+            Text("Joined room successfully")
+                .font(.title2)
+                .bold()
+
+            Text(roomId)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: 400)
+    }
 }
