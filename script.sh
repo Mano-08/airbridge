@@ -1,0 +1,2 @@
+cat "/Users/wmano/Library/Containers/com.mano.airbridge/Data/Library/Application Support/airbridge_5002.log"
+cat "/Users/wmano/Library/Containers/com.mano.airbridge/Data/Library/Application Support/airbridge_50002.log"

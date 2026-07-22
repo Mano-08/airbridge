@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+import hashlib
 import uuid
 import os
 
@@ -12,17 +12,14 @@ rooms: dict[str, dict] = {}
 
 class CreateRoomRequestBody(BaseModel):
     passcode: str
-    cert_fingerprint: str
     peer_ip: str
     peer_port: int
-
 
 class JoinRoomRequestBody(BaseModel):
     passcode: str
 
 
 class JoinRoomResponseBody(BaseModel):
-    cert_fingerprint: str
     peer_ip: str
     peer_port: int
 
@@ -30,9 +27,11 @@ class JoinRoomResponseBody(BaseModel):
 @app.post("/api/v1/room/create")
 def create_room(body: CreateRoomRequestBody):
     room_id = str(uuid.uuid4())[:8]  # short id, easy to share/type
+    
+    passcode_bytes = body.passcode.encode("utf-8")
+    passcode_hash = hashlib.sha256(passcode_bytes).hexdigest()
     rooms[room_id] = {
-        "passcode": body.passcode,
-        "cert_fingerprint": body.cert_fingerprint,
+        "passcode": passcode_hash,
         "peer_ip": body.peer_ip,
         "peer_port": body.peer_port,
     }
@@ -46,13 +45,14 @@ def join_room(room_id: str, body: JoinRoomRequestBody):
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
-    if room["passcode"] != body.passcode:
+    # The passcode from the client is *not* hashed yet, so we hash it and compare to the stored (hashed) passcode.
+    input_passcode_hash = hashlib.sha256(body.passcode.encode("utf-8")).hexdigest()
+    if room["passcode"] != input_passcode_hash:
         raise HTTPException(status_code=403, detail="Invalid passcode")
 
     # Return Peer A's connection info + fingerprint so Peer B can
     # dial them directly and verify their cert against this fingerprint
     return JoinRoomResponseBody(
-        cert_fingerprint=room["cert_fingerprint"],
         peer_ip=room["peer_ip"],
         peer_port=room["peer_port"],
     )
